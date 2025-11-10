@@ -129,9 +129,105 @@ def map_instance_props(node:Dict[str,Any]) -> Dict[str,Any]:
     # for k, v in vprops.items():
     #     props.setdefault(k.lower(), v)
 
-    # name からラベル推定（「Za/Button/Primary」など）
-    # 実プロジェクトに合わせてここで追加マッピング可
     return props
+
+def extract_component_info(node:Dict[str,Any]) -> Dict[str,Any]:
+    """
+    INSTANCE ノードからコンポーネント識別情報を抽出。
+    - componentId: コンポーネントの一意ID
+    - componentName: コンポーネントの階層名（Za/Button など）
+    """
+    info: Dict[str,Any] = {}
+
+    # componentId の取得
+    comp_id = node.get("componentId")
+    if comp_id:
+        info["componentId"] = comp_id
+
+    # componentName の取得（name から推定、または別フィールドがあれば使用）
+    # Figma では INSTANCE の name にコンポーネント名が入ることが多い
+    name = node.get("name")
+    if name:
+        info["componentName"] = name
+
+    return info
+
+def extract_color(fills: Optional[List[Dict[str,Any]]]) -> Optional[str]:
+    """
+    fills 配列から単色を抽出して #RRGGBB 形式で返す。
+    複数色やグラデーション等は対応しない。
+    """
+    if not fills or len(fills) == 0:
+        return None
+
+    # 最初の visible な fill を使用
+    for fill in fills:
+        if fill.get("visible") == False:
+            continue
+        if fill.get("type") == "SOLID":
+            color = fill.get("color", {})
+            r = int(color.get("r", 0) * 255)
+            g = int(color.get("g", 0) * 255)
+            b = int(color.get("b", 0) * 255)
+            return f"#{r:02X}{g:02X}{b:02X}"
+
+    return None
+
+def extract_text_style(node:Dict[str,Any]) -> Dict[str,Any]:
+    """
+    TEXT ノードから基本スタイル情報を抽出。
+    - fontSize: フォントサイズ（整数）
+    - fontWeight: フォントウェイト（数値、例: 400, 700）
+    - color: テキスト色（#RRGGBB 形式）
+    - textAlign: テキスト整列（LEFT/CENTER/RIGHT/JUSTIFIED）
+    """
+    style: Dict[str,Any] = {}
+
+    # フォントサイズ
+    font_size = node.get("style", {}).get("fontSize")
+    if font_size:
+        style["fontSize"] = px_to_int(font_size)
+
+    # フォントウェイト
+    font_weight = node.get("style", {}).get("fontWeight")
+    if font_weight:
+        style["fontWeight"] = int(font_weight)
+
+    # テキスト色
+    fills = node.get("fills")
+    color = extract_color(fills)
+    if color:
+        style["color"] = color
+
+    # テキスト整列
+    text_align = node.get("style", {}).get("textAlignHorizontal")
+    if text_align and text_align != "LEFT":  # LEFT はデフォルトなので省略
+        style["textAlign"] = text_align
+
+    return style
+
+def extract_frame_style(node:Dict[str,Any]) -> Dict[str,Any]:
+    """
+    FRAME ノードから基本スタイル情報を抽出。
+    - backgroundColor: 背景色（#RRGGBB 形式）
+    - cornerRadius: 角丸（整数、0 なら省略）
+    """
+    style: Dict[str,Any] = {}
+
+    # 背景色
+    fills = node.get("fills")
+    bg_color = extract_color(fills)
+    if bg_color:
+        style["backgroundColor"] = bg_color
+
+    # 角丸
+    corner_radius = node.get("cornerRadius")
+    if corner_radius:
+        radius = px_to_int(corner_radius)
+        if radius and radius > 0:
+            style["cornerRadius"] = radius
+
+    return style
 
 def to_dsl(node:Dict[str,Any]) -> Optional[Dict[str,Any]]:
     ntype = node.get("type")
@@ -140,6 +236,19 @@ def to_dsl(node:Dict[str,Any]) -> Optional[Dict[str,Any]]:
     if ntype in ("TEXT",):
         # TEXT ノード
         d = {"type":"TEXT", "name": name, "text": node.get("characters", "")}
+
+        # テキストスタイルを追加
+        style = extract_text_style(node)
+        if style:
+            d["style"] = style
+
+        # opacity を追加（0.5以下の場合のみ）
+        opacity = node.get("opacity")
+        if opacity is not None and opacity <= 0.5:
+            if "style" not in d:
+                d["style"] = {}
+            d["style"]["opacity"] = round(opacity, 2)
+
         return d
 
     if ntype in ("FRAME","COMPONENT","COMPONENT_SET","GROUP","INSTANCE","SECTION","ELLIPSE","RECTANGLE","VECTOR","BOOLEAN_OPERATION","STAR","POLYGON","LINE","SLICE"):
@@ -149,6 +258,15 @@ def to_dsl(node:Dict[str,Any]) -> Optional[Dict[str,Any]]:
         if ntype == "INSTANCE":
             d["type"] = "INSTANCE"
             d["name"] = name  # 例: "Za/Button/Primary"
+
+            # コンポーネント識別情報を追加
+            comp_info = extract_component_info(node)
+            if comp_info.get("componentId"):
+                d["componentId"] = comp_info["componentId"]
+            if comp_info.get("componentName"):
+                d["componentName"] = comp_info["componentName"]
+
+            # バリアント等の props を追加
             props = map_instance_props(node)
             if props: d["props"] = props
         elif ntype in ("ELLIPSE","RECTANGLE"):
@@ -164,6 +282,15 @@ def to_dsl(node:Dict[str,Any]) -> Optional[Dict[str,Any]]:
         layout = map_layout_from_autolayout(node)
         if layout: d["layout"] = layout
 
+        # INSTANCE 以外の FRAME 系ノードにはスタイル情報を追加
+        if ntype != "INSTANCE":
+            frame_style = extract_frame_style(node)
+            if frame_style:
+                # style が既にあれば上書き、なければ新規作成
+                if "style" not in d:
+                    d["style"] = {}
+                d["style"].update(frame_style)
+
         # 子ノード
         children = []
         for ch in node.get("children") or []:
@@ -172,6 +299,13 @@ def to_dsl(node:Dict[str,Any]) -> Optional[Dict[str,Any]]:
                 children.append(mapped)
         if children:
             d["children"] = children
+
+        # opacity を追加（0.5以下の場合のみ）
+        opacity = node.get("opacity")
+        if opacity is not None and opacity <= 0.5:
+            if "style" not in d:
+                d["style"] = {}
+            d["style"]["opacity"] = round(opacity, 2)
 
         return d
 
