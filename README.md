@@ -46,6 +46,16 @@ python3 figma2dsl.py --file-key <FILE_KEY> --node-id <NODE_ID> --pretty > frame.
 python3 figma2dsl.py --file-key <FILE_KEY> --node-id ID_A;ID_B --pretty > frames.json
 ```
 
+## テスト
+
+ユニットテストを実行：
+
+```bash
+python3 -m unittest test_figma2dsl.py -v
+```
+
+全18テストが実行されます。
+
 ## APIキーテスト（figma2dsl未使用）
 
 現在の実装では `X-Figma-Token` ヘッダーを使用してFigma APIにアクセスします。
