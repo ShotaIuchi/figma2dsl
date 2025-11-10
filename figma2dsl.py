@@ -23,8 +23,8 @@ from typing import Any, Dict, List, Optional
 API_BASE = "https://api.figma.com/v1"
 
 def _auth_headers(token:str)->Dict[str,str]:
-    # Figma新仕様では Authorization: Bearer <token> を推奨
-    return {"Authorization": f"Bearer {token}"}
+    # Figma API の認証には X-Figma-Token ヘッダーを使用
+    return {"X-Figma-Token": token}
 
 def fetch_file(file_key:str, token:str)->Dict[str,Any]:
     r = requests.get(f"{API_BASE}/files/{file_key}", headers=_auth_headers(token))
